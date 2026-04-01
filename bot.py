@@ -2,7 +2,7 @@ import logging
 import os
 import json
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,18 +29,17 @@ def search_books(query, books):
         author = book.get("author", "").lower()
         if query in name or query in author:
             results.append(book)
-    results.sort(key=lambda x: (x.get("author", ""), x.get("name", ""), x.get("volume", 0)))
+    results.sort(key=lambda x: (x.get("author", ""), x.get("name", ""), str(x.get("volume", ""))))
     return results
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🌟 *ইলমি পাঠশালা লাইব্রেরিতে স্বাগতম!*\n\n"
-        "📚 বইয়ের নাম বা লেখকের নাম লিখুন — আমি খুঁজে দেব!\n\n"
+        "🌟 ইলমি পাঠশালা লাইব্রেরিতে স্বাগতম!\n\n"
+        "📚 বইয়ের নাম বা লেখকের নাম লিখুন\n\n"
         "উদাহরণ:\n"
-        "• রিয়াদুস সালেহীন\n"
-        "• ইবনে উসাইমীন\n"
-        "• شرح ثلاثة الأصول",
-        parse_mode="Markdown"
+        "রিয়াদুস সালেহীন\n"
+        "ইবনে উসাইমীন\n\n"
+        "/list লিখলে সব বইয়ের তালিকা দেখবেন।"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,16 +49,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not results:
         await update.message.reply_text(
-            f"❌ *'{query}'* নামে কোনো বই পাওয়া যায়নি।\n\n"
-            "অন্য নামে বা লেখকের নামে চেষ্টা করুন।",
-            parse_mode="Markdown"
+            f"❌ '{query}' নামে কোনো বই পাওয়া যায়নি।\n"
+            "অন্য নামে বা লেখকের নামে চেষ্টা করুন।"
         )
         return
 
-    await update.message.reply_text(
-        f"📚 *{len(results)}টি বই পাওয়া গেছে:*",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"📚 {len(results)}টি বই পাওয়া গেছে:")
 
     for book in results:
         name = book.get("name", "অজানা")
@@ -67,23 +62,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         volume = book.get("volume", "")
         message_id = book.get("message_id")
 
-        caption = f"📚 *{name}*"
-        if author:
-            caption += f"\n✍️ {author}"
-        if volume:
-            caption += f"\n🗂️ খণ্ড: {volume}"
-
         try:
             await context.bot.forward_message(
                 chat_id=update.effective_chat.id,
-                from_chat_id=CHANNEL_ID,
+                from_chat_id=int(CHANNEL_ID),
                 message_id=message_id
             )
         except Exception as e:
-            await update.message.reply_text(
-                caption + "\n\n⚠️ ফাইল পাঠাতে সমস্যা হয়েছে।",
-                parse_mode="Markdown"
-            )
+            logger.error(f"Forward error: {e}")
+            caption = f"📚 {name}"
+            if author:
+                caption += f"\n✍️ {author}"
+            if volume:
+                caption += f"\n🗂️ খণ্ড: {volume}"
+            await update.message.reply_text(caption + "\n\n⚠️ ফাইল পাঠাতে সমস্যা হয়েছে।")
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.channel_post
@@ -105,10 +97,7 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
             book_data["author"] = line.replace("✍️", "").strip()
         elif line.startswith("🗂️"):
             vol = line.replace("🗂️", "").replace("খণ্ড:", "").strip()
-            try:
-                book_data["volume"] = int(vol)
-            except:
-                book_data["volume"] = vol
+            book_data["volume"] = vol
 
     if "name" not in book_data:
         return
@@ -120,7 +109,7 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not existing:
         books.append(book_data)
         save_books(books)
-        logger.info(f"নতুন বই সেভ হয়েছে: {book_data['name']}")
+        logger.info(f"নতুন বই সেভ: {book_data['name']}")
 
 async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
     books = load_books()
@@ -128,8 +117,8 @@ async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 এখনো কোনো বই নেই।")
         return
 
-    text = f"📚 *মোট {len(books)}টি বই আছে:*\n\n"
-    for i, book in enumerate(books[:20], 1):
+    text = f"📚 মোট {len(books)}টি বই:\n\n"
+    for i, book in enumerate(books[:30], 1):
         name = book.get("name", "অজানা")
         author = book.get("author", "")
         volume = book.get("volume", "")
@@ -140,19 +129,26 @@ async def list_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
             line += f" (খণ্ড {volume})"
         text += line + "\n"
 
-    if len(books) > 20:
-        text += f"\n... আরো {len(books) - 20}টি বই আছে।"
+    if len(books) > 30:
+        text += f"\n... আরো {len(books) - 30}টি বই আছে।"
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN নেই!")
+        return
+    if not CHANNEL_ID:
+        logger.error("CHANNEL_ID নেই!")
+        return
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_books))
-    app.add_handler(MessageHandler(filters.Chat(int(CHANNEL_ID)) & (filters.Document.ALL | filters.TEXT), handle_channel_post))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS, handle_channel_post))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Bot চালু হয়েছে...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot চালু হয়েছে!")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
